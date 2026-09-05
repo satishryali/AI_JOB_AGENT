@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Jobs{% endblock %}
+{% block content %}
+<h1>Jobs</h1>
+<p class="row-actions">
+  <form class="inline" method="post" action="/jobs/collect"><button type="submit">Collect jobs</button></form>
+  <form class="inline" method="post" action="/jobs/match"><button type="submit">Score matches</button></form>
+</p>
+<table>
+  <thead>
+    <tr>
+      <th>Title</th><th>Company</th><th>Location</th><th>Match</th>
+      <th>Source</th><th>Posted</th><th>Application</th><th>Link</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for job in jobs %}
+    <tr>
+      <td><a href="/jobs/{{ job.id }}">{{ job.title }}</a></td>
+      <td>{{ job.company }}</td>
+      <td>{{ job.location }}</td>
+      <td>{{ job.match_score if job.match_score is not none else "—" }}</td>
+      <td>{{ job.source }}</td>
+      <td>{{ job.posted_date or "—" }}</td>
+      <td>{{ job.application_status or "—" }}</td>
+      <td>{% if job.job_url %}<a href="{{ job.job_url }}" target="_blank" rel="noopener">Open</a>{% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8" class="muted">No jobs collected.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

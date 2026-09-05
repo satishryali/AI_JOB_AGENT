@@ -1,0 +1,10 @@
+.venv
+.git
+chrome_automation_profile
+data/*.db
+data/logs
+data/screenshots
+data/applications
+**/__pycache__
+.pytest_cache
+.env

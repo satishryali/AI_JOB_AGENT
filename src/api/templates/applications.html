@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Applications{% endblock %}
+{% block content %}
+<h1>Applications</h1>
+<table>
+  <thead>
+    <tr><th>Company</th><th>Role</th><th>Applied</th><th>Status</th><th>Resume</th><th>Notes</th></tr>
+  </thead>
+  <tbody>
+    {% for app in applications %}
+    <tr>
+      <td>{{ app.company }}</td>
+      <td><a href="/jobs/{{ app.job_id }}">{{ app.role }}</a></td>
+      <td>{{ app.applied_at or "—" }}</td>
+      <td>
+        <form method="post" action="/applications/{{ app.id }}/status">
+          <select name="status">
+            {% for s in statuses %}
+            <option value="{{ s }}" {% if s == app.status %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+          <input type="hidden" name="notes" value="{{ app.notes }}" />
+          <button type="submit">Save</button>
+        </form>
+      </td>
+      <td>{{ app.resume_version or "—" }}</td>
+      <td>{{ app.notes }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="muted">No applications yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="muted">APPLIED is only stored when you choose that status. The browser helper never submits for you.</p>
+{% endblock %}

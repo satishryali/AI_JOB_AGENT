@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}{{ job.title }}{% endblock %}
+{% block content %}
+<h1>{{ job.title }}</h1>
+<p class="muted">{{ job.company }} · {{ job.location }} · {{ job.source }} · score {{ job.match_score if job.match_score is not none else "—" }}</p>
+<p class="row-actions">
+  {% if job.job_url %}<a class="btn" href="{{ job.job_url }}" target="_blank" rel="noopener">Job URL</a>{% endif %}
+  <form class="inline" method="post" action="/jobs/{{ job.id }}/tailor"><button type="submit">Tailor resume</button></form>
+  <form class="inline" method="post" action="/jobs/{{ job.id }}/cover-letter"><button type="submit">Cover letter</button></form>
+  <form class="inline" method="post" action="/jobs/{{ job.id }}/prepare"><button type="submit">Prepare in browser</button></form>
+</p>
+<h2>AI explanation</h2>
+<p>{{ job.match_explanation or "Not scored yet." }}</p>
+<h2>Matched skills</h2>
+<p>{{ job.matched_skills|join(", ") or "—" }}</p>
+<h2>Missing skills</h2>
+<p>{{ job.missing_skills|join(", ") or "—" }}</p>
+<h2>Application status</h2>
+<p>{{ job.application_status or "none" }}</p>
+{% for app in applications %}
+  {% if app.warning %}<p>{{ app.warning }}</p>{% endif %}
+  <form method="post" action="/applications/{{ app.id }}/status">
+    <select name="status">
+      {% for s in statuses %}
+      <option value="{{ s }}" {% if s == app.status %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+    <input type="text" name="notes" placeholder="notes" value="{{ app.notes }}" />
+    <button type="submit">Update status</button>
+  </form>
+  <p class="muted">Applied: {{ app.applied_at or "not submitted" }} · Resume: {{ app.resume_version or "—" }}</p>
+{% endfor %}
+<h2>Description</h2>
+<pre>{{ job.description }}</pre>
+{% endblock %}

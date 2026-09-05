@@ -1,0 +1,18 @@
+# Skills profile for AI job matching
+# Format: skill_name: proficiency_score (0-10)
+
+skills:
+  - name: "SQL & Database Development"
+    proficiency: 9.0
+  - name: "Database Administration & Modeling"
+    proficiency: 8.4
+  - name: "SAP HANA"
+    proficiency: 8.5
+  - name: "Snowflake"
+    proficiency: 7.8
+  - name: "Python Automation"
+    proficiency: 7.5
+  - name: "ETL/ELT"
+    proficiency: 7.8
+  - name: "Production Support"
+    proficiency: 8.8

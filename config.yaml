@@ -1,0 +1,68 @@
+# AI Job Agent Configuration
+
+# LLM Settings (DeepSeek)
+llm:
+  provider: "deepseek"
+  model: "deepseek-chat"
+  base_url: "https://api.deepseek.com/v1"
+  temperature: 0.7
+  max_tokens: 4000
+
+# Browser Settings
+browser:
+  headless: false
+  timeout: 30000
+  viewport_width: 1920
+  viewport_height: 1080
+  slow_mo: 0
+
+# Job Search Settings
+job_search:
+  keywords:
+    - "python"
+    - "ai"
+    - "machine learning"
+    - "data scientist"
+  locations:
+    - "remote"
+  portals:
+    - "linkedin"
+    - "indeed"
+  max_results_per_portal: 50
+  days_back: 7
+  min_match_score: 60
+
+# Resume Settings
+resume:
+  path: "data/resumes/resume.pdf"
+  skills_path: "data/resumes/skills.yaml"
+  experience_years: 5
+
+# Resume Settings
+resume:
+  path: "data/resumes/resume.pdf"
+  skills_path: "data/resumes/skills.yaml"
+  experience_years: 5
+
+# Application Settings
+application:
+  auto_apply: false
+  max_applications_per_day: 10
+  delay_between_applications: 30
+  cover_letter_template: "data/templates/cover_letter.txt"
+
+# LinkedIn Settings
+linkedin:
+  login_timeout: 30
+  search_timeout: 60
+
+# Database Settings
+database:
+  path: "data/job_hunter.db"
+
+# Logging Settings
+logging:
+  level: "INFO"
+  file: "data/logs/agent.log"
+  rotation: "10 MB"
+  retention: "7 days"
