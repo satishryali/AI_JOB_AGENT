@@ -4,12 +4,13 @@
 <h1>{{ job.title }}</h1>
 <p class="muted">{{ job.company }} · {{ job.location }} · {{ job.source }} · score {{ job.match_score if job.match_score is not none else "—" }}</p>
 <p class="row-actions">
-  {% if job.job_url %}<a class="btn" href="{{ job.job_url }}" target="_blank" rel="noopener">Job URL</a>{% endif %}
-  <form class="inline" method="post" action="/jobs/{{ job.id }}/tailor"><button type="submit">Tailor resume</button></form>
+  {% if job.job_url %}<a class="btn" href="{{ job.job_url }}" target="_blank" rel="noopener">Open application link</a>{% endif %}
+  <form class="inline" method="post" action="/jobs/{{ job.id }}/tailor"><button type="submit">Prepare resume draft</button></form>
   <form class="inline" method="post" action="/jobs/{{ job.id }}/cover-letter"><button type="submit">Cover letter</button></form>
-  <form class="inline" method="post" action="/jobs/{{ job.id }}/prepare"><button type="submit">Prepare in browser</button></form>
+
 </p>
-<h2>AI explanation</h2>
+<p class="muted">Review the draft against your base resume, then open the application link to apply and submit.</p>
+<h2>Match explanation</h2>
 <p>{{ job.match_explanation or "Not scored yet." }}</p>
 <h2>Matched skills</h2>
 <p>{{ job.matched_skills|join(", ") or "—" }}</p>
@@ -28,6 +29,8 @@
     <input type="text" name="notes" placeholder="notes" value="{{ app.notes }}" />
     <button type="submit">Update status</button>
   </form>
+  {% if app.resume_version %}<p>Resume draft: <a class="btn" href="/jobs/{{ job.id }}/documents/resume?format=pdf">PDF</a> <a class="btn" href="/jobs/{{ job.id }}/documents/resume?format=docx">DOCX</a> <a href="/jobs/{{ job.id }}/documents/resume">Text</a></p>{% endif %}
+  {% if app.cover_letter_version %}<p>Cover letter: <a class="btn" href="/jobs/{{ job.id }}/documents/cover?format=pdf">PDF</a> <a class="btn" href="/jobs/{{ job.id }}/documents/cover?format=docx">DOCX</a> <a href="/jobs/{{ job.id }}/documents/cover">Text</a></p>{% endif %}
   <p class="muted">Applied: {{ app.applied_at or "not submitted" }} · Resume: {{ app.resume_version or "—" }}</p>
 {% endfor %}
 <h2>Description</h2>

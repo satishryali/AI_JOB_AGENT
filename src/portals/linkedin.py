@@ -1,5 +1,6 @@
 """LinkedIn portal integration for job search and applications."""
 
+import re
 from typing import Optional
 
 from playwright.async_api import BrowserContext, Page
@@ -7,13 +8,30 @@ from playwright.async_api import BrowserContext, Page
 from src.config.settings import LinkedInSettings
 from src.config.config_loader import get_settings
 from src.config.logging import get_logger
+from src.browser.intervention import wait_for_human
 from src.browser.manager import BrowserManager, get_browser_manager
 from src.models.job import Job, JobSource
-from src.portals.ats_handler import ATSDetector, UniversalApplicant
 from src.portals.base import ApplicationResult, ApplyMethod, LoginStatus, SearchParams
-from src.utils.profile_builder import ProfileBuilder
 
 logger = get_logger(__name__)
+
+_JOB_ID_RE = re.compile(r"(\d{8,})")
+
+
+def _linkedin_job_id(*candidates: Optional[str]) -> str:
+    """Extract a LinkedIn numeric job id from URLs, URNs, or data attributes."""
+    for raw in candidates:
+        if not raw:
+            continue
+        match = _JOB_ID_RE.search(str(raw))
+        if match:
+            return match.group(1)
+    return ""
+
+
+def _linkedin_view_url(job_id: str) -> str:
+    """Logged-in search pane. Direct /jobs/view/{id} often returns HTTP 999 to automation."""
+    return f"https://www.linkedin.com/jobs/search/?currentJobId={job_id}&f_AL=true"
 
 
 class LinkedInClient:
@@ -51,17 +69,21 @@ class LinkedInClient:
         return self._browser
 
     async def login(self) -> LoginStatus:
-        """Login to LinkedIn. Returns LoginStatus."""
+        """Login to LinkedIn. Pauses for checkpoint / CAPTCHA / 2FA."""
+        if self.is_logged_in and self._page:
+            return LoginStatus.ALREADY_LOGGED_IN
+
         browser = await self._ensure_browser()
-        self._context = await browser.new_context()
-        self._page = await self._context.new_page()
+        if self._context is None:
+            self._context = await browser.new_context()
+        if self._page is None:
+            self._page = await self._context.new_page()
 
         logger.info("Navigating to LinkedIn login")
         await self._page.goto(self.LOGIN_URL, wait_until="domcontentloaded")
 
-        # Check if already logged in
         current_url = self._page.url
-        if "feed" in current_url or "jobs" in current_url:
+        if "feed" in current_url or "/jobs" in current_url:
             logger.info("Already logged in to LinkedIn")
             self.is_logged_in = True
             return LoginStatus.ALREADY_LOGGED_IN
@@ -69,29 +91,50 @@ class LinkedInClient:
         username = self._settings.username or self.credentials.get("username", "")
         password = self._settings.password or self.credentials.get("password", "")
         if not username or not password:
-            logger.warning("LinkedIn credentials missing; search/apply require manual login")
-            return LoginStatus.FAILED
+            logger.warning("LinkedIn credentials missing")
+            await wait_for_human("Log into LinkedIn in the browser")
+            self.is_logged_in = True
+            return LoginStatus.ALREADY_LOGGED_IN
 
-        # Fill credentials
         try:
             await self._page.fill("#username", username)
             await self._page.fill("#password", password)
             await self._page.click("button[type='submit']")
-            await self._page.wait_for_load_state("networkidle", timeout=self._settings.login_timeout * 1000)
-
-            # Handle security checkpoint if present
-            if "checkpoint" in self._page.url:
-                logger.warning("LinkedIn security checkpoint detected - manual intervention required")
-                await self._page.wait_for_timeout(30000)  # 30s for manual verification
-
+            await self._page.wait_for_load_state("domcontentloaded", timeout=self._settings.login_timeout * 1000)
         except Exception as e:
             logger.error("LinkedIn login failed", error=str(e))
-            await self._browser.screenshot_on_error(self._page, "linkedin_login_error")
-            return LoginStatus.FAILED
+            if self._browser:
+                await self._browser.screenshot_on_error(self._page, "linkedin_login_error")
+            await wait_for_human("Login failed or timed out — finish login in the browser")
+
+        blocked = await self._security_block_reason()
+        if blocked:
+            await wait_for_human(blocked)
 
         logger.info("LinkedIn login successful")
         self.is_logged_in = True
         return LoginStatus.SUCCESS
+
+    async def _security_block_reason(self) -> str | None:
+        if not self._page:
+            return None
+        url = self._page.url.lower()
+        if any(token in url for token in ("checkpoint", "challenge", "add-phone", "two-step", "captcha", "security")):
+            return f"LinkedIn security page ({self._page.url})"
+        try:
+            captcha = await self._page.query_selector(
+                "iframe[src*='recaptcha'], iframe[src*='captcha'], iframe[src*='hcaptcha']"
+            )
+            if captcha:
+                return "CAPTCHA on the page"
+        except Exception:
+            pass
+        return None
+
+    async def _continue_after_blocks(self) -> None:
+        reason = await self._security_block_reason()
+        if reason:
+            await wait_for_human(reason)
 
     async def search_jobs(
         self,
@@ -114,63 +157,134 @@ class LinkedInClient:
         login_status = await self.login()
         page = self._page
         if page is None:
-            logger.error("LinkedIn page unavailable", status=getattr(login_status, "value", login_status))
+            logger.error("LinkedIn page unavailable after login")
             return []
 
         jobs: list[Job] = []
         seen_ids: set[str] = set()
+        query = " OR ".join(keywords[:5]) if keywords else "python"
+        search_locations = self._dedupe_search_locations(locations)
 
-        for keyword in keywords:
-            for location in locations:
-                try:
-                    url = self._build_search_url(keyword, location)
-                    logger.info("Searching LinkedIn for jobs", keyword=keyword, location=location)
-
-                    await page.goto(url, wait_until="domcontentloaded")
-                    await page.wait_for_selector(".jobs-search-results-list", timeout=10000)
-
-                    # Scroll to load more results
-                    await self._scroll_results(page, max_results)
-
-                    # Parse job cards
-                    job_cards = await page.query_selector_all(".job-card-container")
-
-                    for card in job_cards:
-                        if len(jobs) >= max_results:
-                            break
-
-                        try:
-                            job = await self._parse_job_card(page, card)
-                            if job and job.key not in seen_ids:
-                                seen_ids.add(job.key)
-                                jobs.append(job)
-                        except Exception as e:
-                            logger.debug("Failed to parse job card", error=str(e))
-                            continue
-
-                except Exception as e:
-                    logger.error("LinkedIn search failed", keyword=keyword, location=location, error=str(e))
+        for index, location in enumerate(search_locations):
+            if len(jobs) >= max_results:
+                break
+            try:
+                logger.info(f"Searching LinkedIn keywords={query!r} location={location!r}")
+                opened = await self._open_jobs_search(page, query, location, first=(index == 0))
+                if not opened:
+                    logger.warning(f"Could not open LinkedIn search for {location}")
                     continue
 
-        logger.info("LinkedIn search complete", total_jobs=len(jobs))
+                list_ready = False
+                for selector in (
+                    ".jobs-search-results-list",
+                    ".scaffold-layout__list",
+                    "ul.scaffold-layout__list-container",
+                    ".jobs-search__results-list",
+                    "div.job-card-container",
+                ):
+                    try:
+                        await page.wait_for_selector(selector, timeout=8000)
+                        list_ready = True
+                        break
+                    except Exception:
+                        continue
+                if not list_ready:
+                    logger.warning(f"LinkedIn results list not found for {location}")
+                    continue
+
+                await self._scroll_results(page, max_results)
+                job_cards = await page.query_selector_all(
+                    "div.job-card-container, li.jobs-search-results__list-item, li.scaffold-layout__list-item"
+                )
+                logger.info(f"LinkedIn found {len(job_cards)} cards in {location}")
+
+                for card in job_cards:
+                    if len(jobs) >= max_results:
+                        break
+                    try:
+                        job = await self._parse_job_card(page, card)
+                        if job and job.key not in seen_ids:
+                            seen_ids.add(job.key)
+                            jobs.append(job)
+                    except Exception as e:
+                        logger.debug(f"Failed to parse job card: {e}")
+                        continue
+            except Exception as e:
+                logger.error(f"LinkedIn search failed for {location}: {e}")
+                continue
+
+        logger.info(f"LinkedIn search complete, total_jobs={len(jobs)}")
         return jobs
 
-    async def _build_search_url(self, keyword: str, location: str) -> str:
-        """Build LinkedIn jobs search URL."""
+    def _dedupe_search_locations(self, locations: list[str] | None) -> list[str]:
+        aliases = {"bengaluru": "bangalore", "bengalooru": "bangalore"}
+        seen: set[str] = set()
+        out: list[str] = []
+        for loc in locations or [""]:
+            raw = (loc or "").strip()
+            key = aliases.get(raw.lower(), raw.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(raw)
+        return out or [""]
+
+    async def _open_jobs_search(self, page: Page, query: str, location: str, first: bool) -> bool:
+        """Open a jobs search without relying on /jobs/search full reloads (LinkedIn often returns HTTP 999)."""
+        if not first:
+            if await self._change_search_location(page, location):
+                return True
+            await page.wait_for_timeout(4000)
+        url = self._build_search_url(query, location)
+        if await self._goto_soft(url):
+            await self._continue_after_blocks()
+            return True
+        await wait_for_human(
+            f"LinkedIn blocked the {location} jobs search. "
+            "Open that city in the jobs search box, then press Enter."
+        )
+        return "linkedin.com/jobs" in (page.url or "")
+
+    async def _change_search_location(self, page: Page, location: str) -> bool:
+        """Change city on the current jobs page instead of a new goto."""
+        box = page.locator(
+            "input[aria-label*='City' i], input[aria-label*='Location' i], "
+            ".jobs-search-box__input--location input"
+        ).first
+        try:
+            await box.wait_for(state="visible", timeout=4000)
+            await box.click()
+            await box.fill(location)
+            await page.wait_for_timeout(600)
+            await box.press("Enter")
+            await page.wait_for_timeout(2500)
+            await self._continue_after_blocks()
+            return True
+        except Exception:
+            return False
+
+    def _build_search_url(self, keyword: str, location: str) -> str:
+        """Build a search URL for listings with either internal or external applications."""
+        from urllib.parse import urlencode
+
         params = {
             "keywords": keyword,
             "location": location,
-            "f_TPR": "r604800",  # Past 7 days
+            "f_TPR": f"r{get_settings().job_search.days_back * 86400}",
         }
-        query = "&".join(f"{k}={v.replace(' ', '%20')}" for k, v in params.items())
-        return f"{self.JOBS_URL}?{query}"
+        return f"{self.JOBS_URL}/?{urlencode(params)}"
 
     async def _scroll_results(self, page: Page, max_results: int) -> None:
         """Scroll through job results to load more cards."""
         for _ in range(min(5, max_results // 5)):
             await page.mouse.wheel(0, 1000)
             await page.wait_for_timeout(500)
-            count = len(await page.query_selector_all(".job-card-container"))
+            count = len(
+                await page.query_selector_all(
+                    "div.job-card-container, li.jobs-search-results__list-item"
+                )
+            )
             if count >= max_results:
                 break
 
@@ -179,41 +293,223 @@ class LinkedInClient:
         try:
             await card.click()
 
-            title_el = await card.query_selector(".job-card-list__title")
-            company_el = await card.query_selector(".job-card-container__company-name")
-            location_el = await card.query_selector(".job-card-container__metadata-item")
+            title_el = await card.query_selector(
+                "a.job-card-list__title--link, a.job-card-container__link, "
+                ".job-card-list__title, .artdeco-entity-lockup__title"
+            )
+            company_el = await card.query_selector(
+                ".job-card-container__primary-description, "
+                ".job-card-container__company-name, .artdeco-entity-lockup__subtitle"
+            )
+            location_el = await card.query_selector(
+                ".job-card-container__metadata-item, .job-card-container__metadata-wrapper li"
+            )
 
             title = (await title_el.inner_text()).strip() if title_el else ""
             company = (await company_el.inner_text()).strip() if company_el else ""
             location = (await location_el.inner_text()).strip() if location_el else ""
 
-            if not title or not company:
+            if not title:
                 return None
+            if not company:
+                company = "Unknown"
 
-            # Click to open job details
-            await page.wait_for_selector(".jobs-search__job-details--container", timeout=5000)
-            description_el = await page.query_selector(".jobs-description__content")
+            href = None
+            link = await card.query_selector(
+                "a[href*='/jobs/view/'], a.job-card-list__title--link, "
+                "a.job-card-container__link, a[href*='currentJobId=']"
+            )
+            if link:
+                href = await link.get_attribute("href")
+            if not href and title_el:
+                href = await title_el.get_attribute("href")
+            if href and href.startswith("/"):
+                href = f"https://www.linkedin.com{href}"
+
+            card_id = None
+            for attr in ("data-job-id", "data-occludable-job-id", "data-entity-urn"):
+                card_id = await card.get_attribute(attr)
+                if card_id:
+                    break
+
             description = ""
-            if description_el:
-                description = await description_el.inner_text()
+            try:
+                await card.click()
+                await page.wait_for_timeout(800)
+                description_el = await page.query_selector(
+                    ".jobs-description__content, .jobs-search__job-details--container, "
+                    "#job-details, .jobs-box__html-content"
+                )
+                if description_el:
+                    description = (await description_el.inner_text())[:8000]
+            except Exception:
+                pass
 
-            # Extract URL from card
-            url = await card.get_attribute("href")
-            if url and url.startswith("/"):
-                url = f"https://www.linkedin.com{url}"
+            job_id = _linkedin_job_id(card_id, href, page.url)
+            url = None
+            if job_id:
+                url = _linkedin_view_url(job_id)
+            elif href and "/jobs/view/" in href:
+                url = href.split("?")[0]
+            elif href and "currentJobId=" in href:
+                url = href
 
             return Job(
                 title=title,
                 company=company,
                 location=location,
                 description=description,
-                url=url,
+                url=url or None,
                 source=JobSource.LINKEDIN,
+                external_job_id=job_id,
             )
 
         except Exception as e:
             logger.debug("Job card parse failed", error=str(e))
             return None
+
+    def _resolve_apply_url(self, job: Job) -> str:
+        """Build a LinkedIn job URL the browser can open for Easy Apply."""
+        raw = (job.url or "").strip()
+        if raw.startswith("/"):
+            raw = f"https://www.linkedin.com{raw}"
+        job_id = _linkedin_job_id(job.external_job_id, raw)
+        if job_id:
+            return _linkedin_view_url(job_id)
+        if "linkedin.com" in raw:
+            return raw
+        return ""
+
+    async def _goto_soft(self, url: str) -> bool:
+        """Navigate without failing the apply if LinkedIn returns 999/403."""
+        try:
+            response = await self._page.goto(url, wait_until="domcontentloaded", timeout=25000)
+            status = response.status if response else 0
+            if status >= 400:
+                logger.warning("LinkedIn navigation HTTP error", status=status, url=url)
+                return False
+            await self._page.wait_for_timeout(1500)
+            await self._continue_after_blocks()
+            return True
+        except Exception as e:
+            logger.warning("LinkedIn navigation failed", error=str(e)[:180], url=url)
+            return False
+
+    async def _open_job_for_apply(self, job: Job, apply_url: str) -> bool:
+        """Open the listing so Easy Apply is on the current page."""
+        if await self._page_shows_job(job):
+            return True
+        if await self._select_job_on_results(job):
+            return True
+
+        job_id = _linkedin_job_id(job.external_job_id, apply_url, job.url)
+        candidates: list[str] = []
+        if job_id:
+            candidates.append(_linkedin_view_url(job_id))
+            candidates.append(
+                f"https://www.linkedin.com/jobs/collections/recommended/?currentJobId={job_id}"
+            )
+        if apply_url and apply_url not in candidates:
+            candidates.append(apply_url)
+
+        for url in candidates:
+            if not await self._goto_soft(url):
+                continue
+            if await self._page_shows_job(job):
+                return True
+            if await self._select_job_on_results(job):
+                return True
+            if await self._easy_apply_locator_visible():
+                return True
+        return False
+
+    async def _easy_apply_locator_visible(self) -> bool:
+        try:
+            loc = self._page.get_by_role("button", name=re.compile(r"Easy Apply", re.I))
+            return await loc.first.is_visible()
+        except Exception:
+            return False
+
+    async def _page_shows_job(self, job: Job) -> bool:
+        title = (job.title or "").strip().lower()
+        if not title or not self._page:
+            return False
+        try:
+            heading = await self._page.query_selector(
+                "h1, .job-details-jobs-unified-top-card__job-title, "
+                ".jobs-unified-top-card__job-title"
+            )
+            shown = ((await heading.inner_text()).strip().lower() if heading else "")
+        except Exception:
+            shown = ""
+        return bool(shown) and (title[:24] in shown or shown[:24] in title)
+
+    async def _select_job_on_results(self, job: Job) -> bool:
+        """Click the matching search-result card so Easy Apply appears in the detail pane."""
+        title_key = (job.title or "").strip().lower()[:28]
+        company_key = (job.company or "").strip().lower()[:16]
+        if not title_key:
+            return False
+        cards = await self._page.query_selector_all(
+            "div.job-card-container, li.jobs-search-results__list-item, "
+            "li.scaffold-layout__list-item"
+        )
+        for card in cards:
+            try:
+                text = (await card.inner_text()).lower()
+            except Exception:
+                continue
+            if title_key[:18] not in text:
+                continue
+            if company_key and company_key[:10] not in text and job.company.lower() != "unknown":
+                continue
+            await card.click()
+            await self._page.wait_for_timeout(1200)
+            return True
+        return False
+
+    async def _already_applied_on_page(self) -> bool:
+        try:
+            loc = self._page.get_by_text(re.compile(r"^Applied$", re.I))
+            if await loc.count():
+                return await loc.first.is_visible()
+        except Exception:
+            pass
+        applied = await self._page.query_selector(
+            "button.jobs-apply-button[disabled], span.artdeco-inline-feedback__message"
+        )
+        if not applied:
+            return False
+        try:
+            text = (await applied.inner_text()).lower()
+        except Exception:
+            text = ""
+        return "applied" in text
+
+    async def _click_easy_apply(self) -> bool:
+        """Click the visible Easy Apply button (not Apply on company website)."""
+        locators = [
+            self._page.get_by_role("button", name=re.compile(r"Easy Apply", re.I)),
+            self._page.locator("button.jobs-apply-button").filter(
+                has_text=re.compile(r"Easy Apply", re.I)
+            ),
+            self._page.locator("[aria-label*='Easy Apply']"),
+        ]
+        for loc in locators:
+            try:
+                btn = loc.first
+                await btn.wait_for(state="visible", timeout=4000)
+                label = ((await btn.inner_text()) or "") + " " + ((await btn.get_attribute("aria-label")) or "")
+                if "easy apply" not in label.lower():
+                    continue
+                if re.search(r"\bapplied\b", label, re.I):
+                    continue
+                await btn.click()
+                logger.info("Clicked Easy Apply")
+                return True
+            except Exception:
+                continue
+        return False
 
     async def extract_job(self, job_url: str) -> Optional[Job]:
         """Extract full job details from a LinkedIn job URL."""
@@ -248,144 +544,85 @@ class LinkedInClient:
             return None
 
     async def apply(self, job: Job, resume_path: str = "", cover_letter_path: str = "", profile: Optional[dict] = None) -> ApplicationResult:
-        """Apply to a job via LinkedIn or any redirect target."""
-        if not self._page:
-            await self.login()
+        """Return a link for manual application; never open or submit a form."""
+        return ApplicationResult(
+            success=False, method=ApplyMethod.MANUAL_REQUIRED, requires_manual=True,
+            application_url=str(job.url or self._resolve_apply_url(job) or ""),
+            confirmation_message="Review and submit the application yourself using this link.",
+        )
 
+    async def _easy_apply_modal(self):
+        return self._page.locator(
+            ".jobs-easy-apply-modal, div[data-test-modal-id='easy-apply-modal']"
+        ).first
+
+    async def _easy_apply_modal_text(self) -> str:
         try:
-            logger.info(
-                "Starting application",
-                job=job.title,
-                company=job.company,
-            )
+            modal = await self._easy_apply_modal()
+            if await modal.is_visible():
+                return await modal.inner_text()
+        except Exception:
+            pass
+        return ""
 
-            if not job.url:
-                logger.warning("No job URL available - cannot apply")
-                return ApplicationResult(success=False, error="No job URL")
+    async def _easy_apply_in_progress(self) -> bool:
+        text = await self._easy_apply_modal_text()
+        if not text:
+            return False
+        lowered = text.lower()
+        if "application sent" in lowered or "application was sent" in lowered:
+            return False
+        if re.search(r"\d+\s*/\s*\d+\s*pages", text, re.I):
+            return True
+        if any(w in lowered for w in ("contact info", "resume", "additional questions", "review")):
+            return True
+        try:
+            modal = await self._easy_apply_modal()
+            return await modal.is_visible()
+        except Exception:
+            return False
 
-            await self._page.goto(str(job.url), wait_until="domcontentloaded")
-            await self._page.wait_for_timeout(2000)
+    async def _application_succeeded(self) -> bool:
+        """True only on LinkedIn's post-submit confirmation, not '100 applicants'."""
+        if not self._page:
+            return False
+        if await self._easy_apply_in_progress():
+            return False
+        chunks: list[str] = []
+        modal_text = await self._easy_apply_modal_text()
+        if modal_text:
+            chunks.append(modal_text)
+        try:
+            toast = self._page.locator(".artdeco-toast-item, [data-test-artdeco-toast]")
+            if await toast.count():
+                chunks.append(await toast.first.inner_text())
+        except Exception:
+            pass
+        blob = "\n".join(chunks).lower()
+        if not blob:
+            return False
+        markers = (
+            "application submitted",
+            "your application was sent",
+            "application was sent",
+            "application sent",
+        )
+        return any(m in blob for m in markers)
 
-            # Check if we were redirected to a non-LinkedIn platform
-            current_url = self._page.url
-            platform = ATSDetector.detect(self._page, current_url)
+    async def _click_easy_apply_step(self) -> str:
+        """Legacy entry point: application navigation is now user controlled."""
+        return "manual"
 
-            if platform != "linkedin" and platform != "unknown":
-                logger.info(
-                    "Detected redirect to external careers page - using universal applicant",
-                    platform=platform,
-                    url=current_url[:100],
-                )
-                profile = profile or ProfileBuilder().build()
-                universal = UniversalApplicant(self._page)
-                result = await universal.apply_to_job(
-                    job_url=str(job.url),
-                    profile=profile,
-                    job_title=job.title,
-                    company=job.company,
-                )
-                return ApplicationResult(
-                    success=result,
-                    method=ApplyMethod.EXTERNAL_REDIRECT,
-                    application_url=current_url,
-                )
-
-            # If unknown, detect if it's still LinkedIn-like or something else
-            if "linkedin.com" not in current_url:
-                logger.info(
-                    "Navigated away from LinkedIn - using universal applicant",
-                    url=current_url[:100],
-                )
-                profile = profile or ProfileBuilder().build()
-                universal = UniversalApplicant(self._page)
-                result = await universal.apply_to_job(
-                    job_url=str(job.url),
-                    profile=profile,
-                    job_title=job.title,
-                    company=job.company,
-                )
-                return ApplicationResult(
-                    success=result,
-                    method=ApplyMethod.EXTERNAL_REDIRECT,
-                    application_url=current_url,
-                )
-
-            # Continue with LinkedIn-specific application flow
-            apply_button = await self._page.query_selector(
-                "button.jobs-apply-button, button[aria-label*='Apply']"
-            )
-
-            if not apply_button:
-                # Check if already applied
-                applied_indicator = await self._page.query_selector(
-                    "button.jobs-apply-button[disabled], span[aria-label='Applied']"
-                )
-                if applied_indicator:
-                    logger.info("Already applied to this job", job=job.title)
-                    return ApplicationResult(success=False, error="Already applied")
-                logger.warning("Apply button not found on LinkedIn", job=job.title)
-                return ApplicationResult(
-                    success=False,
-                    method=ApplyMethod.MANUAL_REQUIRED,
-                    error="Apply button not found",
-                )
-
-            await apply_button.click()
-            await self._page.wait_for_timeout(2000)
-
-            await self._fill_application_form(job)
-            await self._upload_resume()
-
-            screenshot = None
-            if self._browser:
-                screenshot = await self._browser.screenshot_on_error(self._page, f"review_{job.company}")
-
-            logger.info(
-                "Application prepared for user review — submit was not clicked",
-                job=job.title,
-            )
-            return ApplicationResult(
-                success=False,
-                method=ApplyMethod.MANUAL_REQUIRED,
-                requires_manual=True,
-                application_url=self._page.url,
-                screenshot_path=str(screenshot) if screenshot else "",
-                confirmation_message="Form filled. Review in the browser and submit yourself.",
-            )
-
-        except Exception as e:
-            logger.error("Application failed", job=job.title, error=str(e))
-            if self._browser:
-                await self._browser.screenshot_on_error(self._page, f"apply_{job.company}")
-            return ApplicationResult(success=False, error=str(e))
+    async def _complete_easy_apply(self, job: Job) -> ApplicationResult:
+        """Legacy entry point: return the link instead of completing a form."""
+        return await self.apply(job)
 
     async def _fill_application_form(self, job: Job) -> bool:
-        """Fill out LinkedIn application form if it appears."""
+        """Fill the current Easy Apply page from profile/.env, using DeepSeek when needed."""
+        from src.ai.easy_apply_form import fill_easy_apply_page
+
         try:
-            # Wait for form container
-            await self._page.wait_for_selector(
-                ".jobs-easy-apply-modal, form.ember-view",
-                timeout=5000,
-            )
-
-            # Fill text inputs
-            text_inputs = await self._page.query_selector_all("input[type='text']")
-            for input_el in text_inputs:
-                placeholder = await input_el.get_attribute("placeholder") or ""
-                if "phone" in placeholder.lower():
-                    phone = get_settings().user.phone
-                    if phone:
-                        await input_el.fill(phone)
-
-            # Check radio buttons / checkboxes
-            radio_inputs = await self._page.query_selector_all("input[type='radio']")
-            for radio in radio_inputs:
-                label = await radio.get_attribute("value") or ""
-                if "yes" in label.lower() or label.lower() in ["1", "true"]:
-                    await radio.check(force=True)
-
-            return True
-
+            return await fill_easy_apply_page(self._page, job)
         except Exception as e:
             logger.debug("No application form to fill", error=str(e))
             return False

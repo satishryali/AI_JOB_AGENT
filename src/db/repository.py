@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, func, case
 from sqlalchemy.orm import Session
 
 from src.config.logging import get_logger
@@ -87,7 +87,7 @@ def list_jobs(
     session: Session,
     min_score: Optional[float] = None,
     status: Optional[str] = None,
-    limit: int = 200,
+    limit: int | None = 200,
 ) -> list[JobRecord]:
     stmt = select(JobRecord).order_by(JobRecord.match_score.desc().nullslast(), JobRecord.id.desc())
     if min_score is not None:
@@ -183,18 +183,20 @@ def list_applications(session: Session, status: Optional[str] = None) -> list[Ap
 
 
 def overview_counts(session: Session) -> dict[str, int]:
-    jobs = list(session.execute(select(JobRecord)).scalars())
-    apps = list(session.execute(select(ApplicationRecord)).scalars())
-    return {
-        "jobs_collected": len(jobs),
-        "relevant_jobs": sum(1 for j in jobs if (j.match_score or 0) >= 50),
-        "jobs_requiring_review": sum(
-            1 for a in apps if a.status in {ApplicationStatus.REVIEW.value, ApplicationStatus.READY.value}
-        ),
-        "applications": len(apps),
-        "interviews": sum(1 for a in apps if a.status == ApplicationStatus.INTERVIEW.value),
-        "offers": sum(1 for a in apps if a.status == ApplicationStatus.OFFER.value),
-    }
+    job_counts = session.execute(select(
+        func.count(JobRecord.id),
+        func.coalesce(func.sum(case((JobRecord.match_score >= 50, 1), else_=0)), 0),
+    )).one()
+    app_counts = session.execute(select(
+        func.count(ApplicationRecord.id),
+        func.coalesce(func.sum(case((ApplicationRecord.status.in_(["review", "ready"]), 1), else_=0)), 0),
+        func.coalesce(func.sum(case((ApplicationRecord.status == "interview", 1), else_=0)), 0),
+        func.coalesce(func.sum(case((ApplicationRecord.status == "offer", 1), else_=0)), 0),
+    )).one()
+    return {"jobs_collected": job_counts[0], "relevant_jobs": job_counts[1],
+            "jobs_requiring_review": app_counts[1], "applications": app_counts[0],
+            "interviews": app_counts[2], "offers": app_counts[3]}
+
 
 
 def get_or_create_profile(session: Session) -> UserProfileRecord:
@@ -208,7 +210,7 @@ def get_or_create_profile(session: Session) -> UserProfileRecord:
 
 
 def job_to_dict(job: JobRecord) -> dict:
-    latest = job.applications[-1] if job.applications else None
+    latest = max(job.applications, key=lambda app: app.id or 0, default=None)
     return {
         "id": job.id,
         "source": job.source,

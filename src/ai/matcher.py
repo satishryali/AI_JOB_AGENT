@@ -14,6 +14,44 @@ from src.models.job import Job, MatchResult
 
 logger = get_logger(__name__)
 
+SCORE_BANDS = [
+    ("90-100  High match", 90.0, 100.0, True),
+    ("70-90", 70.0, 90.0, False),
+    ("50-70", 50.0, 70.0, False),
+    ("30-50", 30.0, 50.0, False),
+    ("10-30", 10.0, 30.0, False),
+]
+
+
+def score_band(score: float | None) -> str | None:
+    """Return band label, or None if below 10 / unscored."""
+    if score is None:
+        return None
+    if score >= 90:
+        return "90-100  High match"
+    if score >= 70:
+        return "70-90"
+    if score >= 50:
+        return "50-70"
+    if score >= 30:
+        return "30-50"
+    if score >= 10:
+        return "10-30"
+    return None
+
+
+def group_by_score_band(items: list, score_of) -> list[tuple[str, list]]:
+    """Group items into display bands. Scores below 10 are dropped."""
+    buckets: dict[str, list] = {label: [] for label, *_ in SCORE_BANDS}
+    for item in items:
+        label = score_band(score_of(item))
+        if label:
+            buckets[label].append(item)
+    for label in buckets:
+        buckets[label].sort(key=score_of, reverse=True)
+    return [(label, buckets[label]) for label, *_ in SCORE_BANDS]
+
+
 COMMON_SKILLS = [
     "python", "sql", "postgresql", "mysql", "oracle", "pl/sql", "plsql", "snowflake",
     "sap hana", "hana", "etl", "elt", "airflow", "dbt", "spark", "pyspark",
@@ -132,15 +170,38 @@ def _title_score(job_title: str, preferred_roles: list[str]) -> float:
     return 25.0
 
 
+_CITY_ALIASES = {
+    "bangalore": {"bangalore", "bengaluru", "blr"},
+    "bengaluru": {"bangalore", "bengaluru", "blr"},
+    "hyderabad": {"hyderabad", "hyd"},
+}
+
+
+def _location_tokens(text: str) -> set[str]:
+    n = _norm(text)
+    tokens = set(n.replace(",", " ").split())
+    tokens.add(n)
+    expanded = set(tokens)
+    for token in list(tokens):
+        for key, aliases in _CITY_ALIASES.items():
+            if token == key or token in aliases:
+                expanded.update(aliases)
+    return expanded
+
+
 def _location_score(job_location: str, preferred_locations: list[str], remote: bool) -> float:
     loc = _norm(job_location)
+    job_tokens = _location_tokens(job_location)
     if remote or "remote" in loc:
         if not preferred_locations or any("remote" in _norm(p) for p in preferred_locations):
-            return 100.0
-        return 70.0
+            return 80.0
+        return 40.0
     if not preferred_locations:
         return 60.0
     for pref in preferred_locations:
+        pref_tokens = _location_tokens(pref)
+        if pref_tokens & job_tokens:
+            return 100.0
         if _norm(pref) in loc or loc in _norm(pref):
             return 100.0
     return 20.0
@@ -158,18 +219,56 @@ def _experience_score(required: Optional[int], years: int) -> float:
     return 10.0
 
 
+def _salary_amounts(text: str) -> tuple[float, float, str, str] | None:
+    """Return annualized bounds when a pay period is explicit.
+
+    Hourly/day rates assume 40 hours/week and 260 working days/year. Different
+    currencies or an explicit period on only one side are not compared.
+    """
+    blob = text.lower()
+    currency = ""
+    for code, pattern in [("INR", r"inr|\u20b9|\brs\.?|lpa|lakh|lac\b|crore"),
+                          ("USD", r"usd|us\$|\$"), ("EUR", r"eur|\u20ac"), ("GBP", r"gbp|\u00a3")]:
+        if re.search(pattern, blob):
+            currency = code
+            break
+    period, factor = "", 1.0
+    for label, pattern, multiplier in [
+        ("hour", r"hour|hourly|/hr|per hr|\bhr\b", 2080),
+        ("month", r"month|monthly|p\.m\.", 12),
+        ("week", r"week|weekly", 52), ("day", r"daily|per day|/day", 260),
+        ("year", r"year|annual|annum|lpa|p\.a\.", 1),
+    ]:
+        if re.search(pattern, blob):
+            period, factor = label, multiplier
+            break
+    scale = 1.0
+    if re.search(r"lpa|lakh|lac\b", blob):
+        scale = 100000.0
+    elif "crore" in blob:
+        scale = 10000000.0
+    values = []
+    for amount, suffix in re.findall(r"(\d[\d,]*(?:\.\d+)?)\s*(million|crore|lakhs?|lacs?|lpa|k|m)?(?!\w)", blob):
+        multiplier = {"k": 1000.0, "m": 1000000.0, "million": 1000000.0,
+                      "lakh": 100000.0, "lakhs": 100000.0, "lac": 100000.0,
+                      "lacs": 100000.0, "lpa": 100000.0, "crore": 10000000.0}.get(suffix, scale)
+        values.append(float(amount.replace(",", "")) * multiplier * factor)
+    if not values:
+        return None
+    return min(values), max(values), currency, period
+
+
 def _salary_score(salary_text: str, expectation: str) -> float:
-    if not salary_text or not expectation:
+    job, expected = _salary_amounts(salary_text), _salary_amounts(expectation)
+    if not job or not expected:
         return 70.0
-    nums_job = [int(x.replace(",", "")) for x in re.findall(r"\d{2,6}", salary_text)]
-    nums_exp = [int(x.replace(",", "")) for x in re.findall(r"\d{2,6}", expectation)]
-    if not nums_job or not nums_exp:
+    if job[2] and expected[2] and job[2] != expected[2]:
         return 70.0
-    job_max = max(nums_job)
-    exp_min = min(nums_exp)
-    if job_max >= exp_min:
+    if bool(job[3]) != bool(expected[3]):
+        return 70.0
+    if job[1] >= expected[0]:
         return 100.0
-    if job_max >= exp_min * 0.8:
+    if job[1] >= expected[0] * 0.8:
         return 60.0
     return 30.0
 

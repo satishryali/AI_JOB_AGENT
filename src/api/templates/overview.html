@@ -2,6 +2,7 @@
 {% block title %}Overview{% endblock %}
 {% block content %}
 <h1>Overview</h1>
+<p>Collect jobs, optionally rank them, and prepare a resume draft. Open the application link when you are ready to review and submit.</p>
 <div class="cards">
   <div class="card"><h3>Jobs collected</h3><p>{{ counts.jobs_collected }}</p></div>
   <div class="card"><h3>Relevant jobs</h3><p>{{ counts.relevant_jobs }}</p></div>
@@ -14,23 +15,25 @@
   <form class="inline" method="post" action="/jobs/collect"><button type="submit">Collect jobs</button></form>
   <form class="inline" method="post" action="/jobs/match"><button type="submit">Score matches</button></form>
 </p>
-<h2>Recent jobs</h2>
+{% for label, items in bands %}
+<h2>{{ label }} <span class="muted">({{ items|length }})</span></h2>
 <table>
   <thead>
     <tr><th>Title</th><th>Company</th><th>Location</th><th>Score</th><th>Source</th></tr>
   </thead>
   <tbody>
-    {% for job in jobs %}
+    {% for job in items %}
     <tr>
       <td><a href="/jobs/{{ job.id }}">{{ job.title }}</a></td>
       <td>{{ job.company }}</td>
       <td>{{ job.location }}</td>
-      <td>{{ job.match_score if job.match_score is not none else "—" }}</td>
+      <td>{{ job.match_score }}</td>
       <td>{{ job.source }}</td>
     </tr>
     {% else %}
-    <tr><td colspan="5" class="muted">No jobs yet. Click Collect jobs.</td></tr>
+    <tr><td colspan="5" class="muted">None in this band</td></tr>
     {% endfor %}
   </tbody>
 </table>
+{% endfor %}
 {% endblock %}

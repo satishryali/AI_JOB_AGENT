@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from src.collectors.adzuna import AdzunaCollector
 from src.collectors.base import BaseCollector, CollectorResult
 from src.collectors.remotive import RemotiveCollector
+from src.collectors.jobspy import JobSpyCollector, SUPPORTED_SITES
+from src.config.config_loader import get_settings
 from src.config.logging import get_logger
 from src.jobs.dedupe import deduplicate_jobs
 from src.models.job import NormalizedJob
@@ -13,7 +17,12 @@ logger = get_logger(__name__)
 
 
 def default_collectors() -> list[BaseCollector]:
-    return [RemotiveCollector(), AdzunaCollector()]
+    collectors = [RemotiveCollector(), AdzunaCollector()]
+    for site in dict.fromkeys(get_settings().job_search.collection_sites):
+        if site not in SUPPORTED_SITES:
+            raise ValueError(f"Unsupported collection site: {site}")
+        collectors.append(JobSpyCollector(site))
+    return collectors
 
 
 async def run_collectors(
@@ -29,22 +38,26 @@ async def run_collectors(
     collectors = collectors or default_collectors()
     logger.info("collector started", sources=[c.name for c in collectors])
 
-    combined: list[NormalizedJob] = []
-    results: list[CollectorResult] = []
+    semaphore = asyncio.Semaphore(3)
 
-    for collector in collectors:
-        logger.info("source started", source=collector.name)
-        try:
-            jobs = await collector.collect(keywords, locations, max_results)
-            combined.extend(jobs)
-            results.append(CollectorResult(source=collector.name, jobs=jobs))
-            logger.info("number of jobs collected", source=collector.name, count=len(jobs))
-        except PermissionError as e:
-            logger.info("source skipped", source=collector.name, reason=str(e))
-            results.append(CollectorResult(source=collector.name, skipped=True, error=str(e)))
-        except Exception as e:
-            logger.error("source failed", source=collector.name, error=str(e))
-            results.append(CollectorResult(source=collector.name, error=str(e)))
+    async def collect_source(collector):
+        async with semaphore:
+            logger.info("source started", source=collector.name)
+            try:
+                jobs = await collector.collect(keywords, locations, max_results)
+                logger.info(f"{collector.name}: {len(jobs)} jobs collected")
+                return CollectorResult(source=collector.name, jobs=jobs)
+            except PermissionError as e:
+                return CollectorResult(source=collector.name, skipped=True, error=str(e))
+            except asyncio.TimeoutError:
+                return CollectorResult(source=collector.name, jobs=getattr(collector, "partial_jobs", []),
+                                       error="Search timed out; try fewer queries or retry later")
+            except Exception as e:
+                logger.error(f"{collector.name} source failed: {e}")
+                return CollectorResult(source=collector.name, jobs=getattr(collector, "partial_jobs", []), error=str(e))
+
+    results = await asyncio.gather(*(collect_source(c) for c in collectors))
+    combined = [job for result in results for job in result.jobs]
 
     unique, duplicates = deduplicate_jobs(combined)
     logger.info(

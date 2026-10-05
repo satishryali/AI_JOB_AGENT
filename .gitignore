@@ -70,6 +70,8 @@ browser_profile/
 .coverage
 htmlcov/
 .pytest_cache/
+data/pytest-tmp/
+data/verification/
 
 # Type checking
 .mypy_cache/

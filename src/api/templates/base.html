@@ -18,10 +18,15 @@
     th, td { text-align:left; padding:.6rem .75rem; border-bottom:1px solid #243044; font-size:.92rem; }
     th { color:var(--muted); font-weight:600; }
     a.btn, button, input[type=submit] { background:var(--accent); color:#061018; border:0; padding:.45rem .8rem; border-radius:6px; cursor:pointer; text-decoration:none; font-weight:600; }
-    .row-actions { display:flex; gap:.4rem; flex-wrap:wrap; }
+    .row-actions { display:flex; gap:.4rem; flex-wrap:wrap; align-items:flex-start; }
+    main a { color:var(--accent); }
     .muted { color:var(--muted); }
     form.inline { display:inline; }
-    select, input[type=text] { background:#0f1419; color:var(--text); border:1px solid #314155; padding:.35rem; border-radius:4px; }
+    select, input[type=text], input[type=url], input[type=search], input[type=number], textarea { background:#0f1419; color:var(--text); border:1px solid #314155; padding:.35rem; border-radius:4px; }
+    .job-filters { display:flex; gap:1rem; flex-wrap:wrap; margin-top:1.5rem; align-items:center; }
+    .table-scroll { overflow-x:auto; }
+    .sort-column { background:transparent; color:var(--muted); padding:0; }
+    [hidden] { display:none !important; }
     pre { white-space:pre-wrap; background:#0c1117; padding:1rem; border-radius:8px; }
   </style>
 </head>

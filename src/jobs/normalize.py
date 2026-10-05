@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -30,7 +30,7 @@ def _source(value: Any) -> JobSource:
         return JobSource.OTHER
 
 
-def _parse_datetime(value: Any) -> Optional[datetime]:
+def _parse_datetime(value: Any, now: datetime | None = None) -> Optional[datetime]:
     if value is None or value == "":
         return None
     if isinstance(value, datetime):
@@ -38,6 +38,30 @@ def _parse_datetime(value: Any) -> Optional[datetime]:
             return value.replace(tzinfo=timezone.utc)
         return value
     text = _clean(value)
+    reference = now or datetime.now(timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    relative = text.lower().removeprefix("posted ").removeprefix("reposted ").strip()
+    if relative in {"today", "just now", "now"}:
+        return reference
+    if relative == "yesterday":
+        return reference - timedelta(days=1)
+    match = re.fullmatch(r"(?:about\s+)?(\d+)\s*\+?\s*(minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?|[mhdw])\s*(?:ago)?", relative)
+    if match:
+        amount, unit = int(match[1]), match[2]
+        if unit.startswith("min") or unit == "m":
+            delta = timedelta(minutes=amount)
+        elif unit.startswith(("hour", "hr")) or unit == "h":
+            delta = timedelta(hours=amount)
+        elif unit.startswith("day") or unit == "d":
+            delta = timedelta(days=amount)
+        elif unit.startswith("week") or unit == "w":
+            delta = timedelta(weeks=amount)
+        elif unit.startswith("month"):
+            delta = timedelta(days=amount * 30)
+        else:
+            delta = timedelta(days=amount * 365)
+        return reference - delta
     for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"):
         try:
             parsed = datetime.strptime(text.replace("Z", ""), fmt.replace("Z", ""))
@@ -82,7 +106,7 @@ def to_normalized(payload: dict[str, Any] | NormalizedJob | Job) -> NormalizedJo
         data = payload.model_dump()
     elif isinstance(payload, Job):
         data = {
-            "source": payload.source.value,
+            "source": payload.raw_data.get("source") or payload.source.value,
             "external_job_id": payload.external_job_id,
             "title": payload.title,
             "company": payload.company,
@@ -126,21 +150,20 @@ def to_normalized(payload: dict[str, Any] | NormalizedJob | Job) -> NormalizedJo
 
 def to_job(normalized: NormalizedJob) -> Job:
     """Convert a normalized job into the existing Job model."""
-    url = normalized.job_url or None
+    url = (normalized.job_url or "").strip() or None
     payload = dict(
         title=normalized.title or "Untitled",
         company=normalized.company or "Unknown",
         location=normalized.location,
         description=normalized.description,
         source=_source(normalized.source),
+        raw_data={"source": normalized.source},
         salary_range=normalized.salary or None,
         posted_date=normalized.posted_date,
         skills_required=list(normalized.skills),
         remote="remote" in normalized.location.lower(),
         external_job_id=normalized.external_job_id,
         collected_at=datetime.now(timezone.utc),
+        url=url,
     )
-    try:
-        return Job(url=url, **payload)
-    except Exception:
-        return Job(url=None, **payload)
+    return Job(**payload)

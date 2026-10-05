@@ -10,7 +10,7 @@ from src.config.config_loader import get_settings
 from src.config.logging import setup_logging
 from src.db.session import init_db
 from src.jobs.searcher import JobSearcher
-from src.jobs.tracker import ApplicationTracker
+from src.jobs.export import save_jobs_csv
 
 
 async def read_resume_text(path: Path) -> str:
@@ -31,36 +31,45 @@ async def read_resume_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="ignore")
 
 
-async def run_pipeline() -> None:
-    """Collect and score jobs. Does not apply."""
+async def run_agent(rank: bool = True, include_linkedin: bool = False, csv_path: Path | None = None) -> None:
+    """Collect listings and optionally rank them; the user applies via the links."""
     settings = get_settings()
     setup_logging(settings.logging)
     init_db()
-
-    print("Starting AI Job Hunter (collect + match only)...")
     searcher = JobSearcher()
-    tracker = ApplicationTracker()
-    tracker.connect()
-    resume_path = settings.resume.path
-    resume_text = await read_resume_text(resume_path)
-    print(f"Resume loaded: {bool(resume_text)} ({resume_path})")
+    linkedin = None
+    try:
+        if include_linkedin:
+            from src.portals.linkedin import LinkedInClient
 
-    jobs = await searcher.search_jobs()
-    print(f"Found {len(jobs)} jobs")
-    if not jobs:
-        tracker.close()
-        return
-
-    matched = await searcher.match_jobs(jobs, resume_text, settings.job_search.min_match_score)
-    print(f"Scored {len(matched)} jobs (threshold {settings.job_search.min_match_score})")
-    for result in matched[:15]:
-        print(f"  {result.score:5.1f}  {result.job.title} @ {result.job.company}")
-        if result.matched_skills:
-            print(f"         matched: {', '.join(result.matched_skills[:8])}")
-        if result.missing_skills:
-            print(f"         missing: {', '.join(result.missing_skills[:8])}")
-    print("Applications are never submitted automatically. Use the dashboard to review and apply.")
-    tracker.close()
+            linkedin = LinkedInClient()
+            await linkedin.login()
+        jobs = await searcher.search_jobs(linkedin_client=linkedin)
+        print(f"Collected {len(jobs)} jobs")
+        if rank:
+            if not settings.resume.path.exists():
+                print(f"Resume not found: {settings.resume.path}. Showing unranked listings.")
+                rank = False
+            else:
+                resume_text = await read_resume_text(settings.resume.path)
+                matched = await searcher.match_jobs(jobs, resume_text)
+                for match in matched:
+                    print(f"{match.score:5.1f}  {match.job.title} @ {match.job.company}")
+                    print(f"  Application link: {match.job.url or 'Unavailable'}")
+                    print(f"  {match.reasoning}")
+        if not rank:
+            for job in jobs:
+                print(f"{job.title} @ {job.company} [{job.location}]")
+                print(f"  Application link: {job.url or 'Unavailable'}")
+        for source in searcher.collection_results:
+            if source.error:
+                print(f"{source.source}: {source.error}")
+        if csv_path is not None:
+            print(f"CSV saved: {save_jobs_csv(csv_path)}")
+        print("Review listings and prepare resume drafts in the dashboard. Apply using the links.")
+    finally:
+        if linkedin is not None:
+            await linkedin.close()
 
 
 def serve() -> None:
@@ -78,14 +87,16 @@ def main() -> None:
         "command",
         nargs="?",
         default="serve",
-        choices=["serve", "collect", "pipeline"],
-        help="serve = dashboard (default), pipeline = collect+match",
+        choices=["apply", "serve", "collect", "pipeline"],
+        help="serve = dashboard (default), collect = listings, pipeline = listings + ranking; apply is a legacy alias for pipeline",
     )
+    parser.add_argument("--linkedin", action="store_true", help="Include LinkedIn browser collection; may require manual login")
+    parser.add_argument("--csv", type=Path, default=Path("data/exports/jobs.csv"), help="CSV output for collection commands")
     args = parser.parse_args()
-    if args.command in {"collect", "pipeline"}:
-        asyncio.run(run_pipeline())
-    else:
+    if args.command == "serve":
         serve()
+    else:
+        asyncio.run(run_agent(rank=args.command != "collect", include_linkedin=args.linkedin, csv_path=args.csv))
 
 
 if __name__ == "__main__":

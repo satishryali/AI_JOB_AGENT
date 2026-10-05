@@ -20,6 +20,7 @@ class JobSearcher:
 
     def __init__(self, settings: Optional[JobSearchSettings] = None):
         self._settings = settings or get_settings().job_search
+        self.collection_results = []
 
     async def search_jobs(
         self,
@@ -27,12 +28,9 @@ class JobSearcher:
         locations: list[str] | None = None,
         portals: list[str] | None = None,
         max_results: int | None = None,
+        linkedin_client=None,
     ) -> list[Job]:
-        """Search for jobs across configured collectors.
-
-        Portal names are accepted for compatibility; HTTP collectors run first.
-        Browser portals are not invoked here so a failed scrape cannot crash collection.
-        """
+        """Search HTTP collectors, plus LinkedIn when a client is provided."""
         keywords = keywords or self._settings.keywords
         locations = locations or self._settings.locations
         max_results = max_results or self._settings.max_results_per_portal
@@ -46,6 +44,31 @@ class JobSearcher:
         )
 
         unique, results, duplicates = await run_collectors(keywords, locations, max_results)
+        self.collection_results = results
+        all_jobs = [to_job(item) for item in unique]
+        print(f"  Remotive/API jobs: {len(all_jobs)}")
+
+        portals = portals or self._settings.portals
+        if any(p.lower() == "linkedin" for p in portals) and linkedin_client is not None:
+            try:
+                logger.info("source started", source="linkedin")
+                li_jobs = await linkedin_client.search_jobs(
+                    keywords=keywords,
+                    locations=locations,
+                    max_results=max_results,
+                )
+                all_jobs.extend(li_jobs)
+                print(f"  LinkedIn jobs: {len(li_jobs)}")
+            except Exception as e:
+                logger.error(f"LinkedIn collection failed: {e}")
+                print(f"  LinkedIn jobs: 0 ({e})")
+
+        from src.jobs.dedupe import deduplicate_jobs
+        from src.jobs.normalize import to_normalized
+
+        normalized = [to_normalized(j) for j in all_jobs]
+        unique, extra_dupes = deduplicate_jobs(normalized)
+        duplicates += extra_dupes
         init_db()
         jobs: list[Job] = []
         new_count = 0
@@ -107,18 +130,6 @@ class JobSearcher:
                     salary_expectation=settings.user.salary_expectations,
                     min_score=min_score,
                 )
-                with session_scope() as session:
-                    from src.jobs.normalize import to_normalized
-
-                    row, _ = upsert_job(session, to_normalized(job))
-                    update_match(
-                        session,
-                        row.id,
-                        result.score,
-                        result.matched_skills,
-                        result.missing_skills,
-                        result.reasoning,
-                    )
                 logger.info(
                     "Job matched",
                     job=job.title,
@@ -131,5 +142,15 @@ class JobSearcher:
                 logger.error("Job matching failed", job=job.title, error=str(e))
                 continue
 
+        # Persist the scored batch in one transaction. Scoring failures above remain isolated.
+        with session_scope() as session:
+            from src.jobs.normalize import to_normalized
+
+            for result in results:
+                row, _ = upsert_job(session, to_normalized(result.job))
+                update_match(session, row.id, result.score, result.matched_skills,
+                             result.missing_skills, result.reasoning)
+
+        results.sort(key=lambda r: r.score, reverse=True)
         logger.info("AI matching completed", matched=len(results))
         return results

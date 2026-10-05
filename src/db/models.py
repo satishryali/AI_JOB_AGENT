@@ -53,6 +53,7 @@ class JobRecord(Base):
     applications: Mapped[list["ApplicationRecord"]] = relationship(
         back_populates="job",
         cascade="all, delete-orphan",
+        order_by="ApplicationRecord.id",
     )
 
 

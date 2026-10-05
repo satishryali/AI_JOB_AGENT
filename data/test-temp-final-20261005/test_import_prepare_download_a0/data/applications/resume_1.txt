@@ -1,0 +1,15 @@
+Candidate for Data Engineer at Example. Experience and skills drawn only from the provided resume, emphasizing python, sql, SQL & Database Development, Database Administration & Modeling, SAP HANA, Snowflake, Python Automation, ETL/ELT.
+
+Skills (reordered):
+- python
+- sql
+- SQL & Database Development
+- Database Administration & Modeling
+- SAP HANA
+- Snowflake
+- Python Automation
+- ETL/ELT
+- Production Support
+
+--- Original resume (unchanged facts) ---
+Python engineer. Built SQL pipelines at Example.

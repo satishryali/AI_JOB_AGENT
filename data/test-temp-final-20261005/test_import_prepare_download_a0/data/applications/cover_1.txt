@@ -1,0 +1,40 @@
+2026-10-05
+
+Dear Hiring Manager,
+
+I am writing to express my strong interest in the Data Engineer position at Example. With 4 years of experience as a database professional specializing in PL/SQL development, ETL/ELT pipeline engineering, and data automation, I am confident in my ability to contribute immediately to your team.
+
+In my current role at Tata Consultancy Services, I have had the opportunity to work on three major projects that have strengthened my database expertise:
+
+**Project 1 - Analytical Reporting & Automation (SAP HANA, PL/SQL, Python):**
+- Designed and enhanced SAP HANA calculation views for analytical reporting, improving query performance through optimized joins and aggregation logic
+- Automated Excel-based workflows using Python and OpenPyXL, reducing manual effort by 40%
+- Implemented validation, logging, and error-handling mechanisms, increasing automation reliability by 25%
+
+**Project 2 - Website Database Development (Snowflake, SQL, PL/SQL):**
+- Engineered PL/SQL packages, procedures, functions, and cursors to implement complex business logic
+- Built and optimized SQL queries to improve website performance and reduce response time
+- Diagnosed production issues, identified root causes, and implemented permanent fixes
+
+**Project 3 - ETL/ELT Pipeline Development (Snowflake, SAP HANA, Python):**
+- Architected and deployed end-to-end Python-based ELT pipelines migrating data from SAP HANA to Snowflake
+- Automated daily pipeline execution using Control-M with dependency management and centralized logging
+- Provided production support with comprehensive data validation and error resolution
+
+**Key skills I bring to this role:**
+- SQL & Database Development (9/10)
+- Database Administration & Modeling (8.4/10)
+- SAP HANA (8.5/10)
+- Snowflake (7.8/10)
+- Python Automation (7.5/10)
+- ETL/ELT (7.8/10)
+- Production Support (8.8/10)
+
+I am particularly drawn to this opportunity because it aligns perfectly with my experience in Data Engineer. My ability to combine deep database expertise with Python automation and data pipeline engineering makes me well-suited to deliver high-impact results.
+
+I would welcome the opportunity to discuss how my background and skills can contribute to Example's success. Thank you for considering my application.
+
+Best regards,
+Satyanarayana Ryali
++91 9182595928 | satishryali252@gmail.com
+www.linkedin.com/in/ryali-satish | github.com/satishryali

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field
 
 
 class JobSource(str, Enum):
@@ -16,6 +16,10 @@ class JobSource(str, Enum):
     FOUNDIT = "foundit"
     WELLFOUND = "wellfound"
     GLASSDOOR = "glassdoor"
+    GOOGLE = "google"
+    BAYT = "bayt"
+    BDJOBS = "bdjobs"
+    ZIP_RECRUITER = "zip_recruiter"
     REMOTIVE = "remotive"
     ADZUNA = "adzuna"
     COMPANY = "company"
@@ -55,7 +59,7 @@ class Job(BaseModel):
     company: str = Field(..., description="Company name")
     location: str = Field("", description="Job location")
     description: str = Field("", description="Full job description text")
-    url: Optional[HttpUrl] = Field(None, description="Job listing URL")
+    url: Optional[str] = Field(None, description="Job listing URL")
     source: JobSource = Field(JobSource.OTHER, description="Source portal")
     employment_type: Optional[str] = Field(None, description="Full-time, Part-time, etc.")
     salary_range: Optional[str] = Field(None, description="Salary range if available")

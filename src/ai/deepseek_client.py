@@ -122,12 +122,11 @@ class DeepSeekClient:
 
         logger.debug("Generating response", prompt_length=len(prompt))
 
-        response = await client.chat.completions.create(
-            model=self._settings.model,
-            messages=messages,
-            temperature=self._settings.temperature,
-            max_tokens=self._settings.max_tokens,
-        )
+        options = dict(model=self._settings.model, messages=messages,
+                       max_tokens=self._settings.max_tokens)
+        if self._settings.model != "deepseek-reasoner":
+            options["temperature"] = self._settings.temperature
+        response = await client.chat.completions.create(**options)
 
         if not response.choices or not response.choices[0].message.content:
             raise DeepSeekResponseError("Empty response from DeepSeek")
@@ -159,13 +158,14 @@ class DeepSeekClient:
 
         logger.debug("Generating JSON response", prompt_length=len(prompt))
 
-        response = await client.chat.completions.create(
-            model=self._settings.model,
-            messages=messages,
-            temperature=self._settings.temperature,
-            max_tokens=self._settings.max_tokens,
-            response_format={"type": "json_object"},
-        )
+        options = dict(model=self._settings.model, messages=messages,
+                       max_tokens=self._settings.max_tokens)
+        # Legacy reasoner deployments reject JSON mode and sampling arguments.
+        # Prompt for JSON there, then enforce the same parsing/schema validation.
+        if self._settings.model != "deepseek-reasoner":
+            options["temperature"] = self._settings.temperature
+            options["response_format"] = {"type": "json_object"}
+        response = await client.chat.completions.create(**options)
 
         if not response.choices or not response.choices[0].message.content:
             raise DeepSeekResponseError("Empty response from DeepSeek")
@@ -185,6 +185,9 @@ class DeepSeekClient:
         except json.JSONDecodeError as e:
             logger.error("Failed to parse JSON response", response=text[:500])
             raise DeepSeekResponseError(f"Invalid JSON response: {e}") from e
+
+        if not isinstance(data, dict):
+            raise DeepSeekResponseError("Expected a JSON object")
 
         if schema:
             try:

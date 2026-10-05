@@ -1,33 +1,82 @@
 {% extends "base.html" %}
 {% block title %}Jobs{% endblock %}
 {% block content %}
-<h1>Jobs</h1>
-<p class="row-actions">
-  <form class="inline" method="post" action="/jobs/collect"><button type="submit">Collect jobs</button></form>
+<h1>Your job shortlist</h1>
+<p class="muted">Review all saved listings. Use the filters below to narrow your shortlist and click column headings to sort.</p>
+<div class="row-actions">
+  <form method="post" action="/jobs/collect">
+    <p><label>Roles (comma separated) <input type="text" name="keywords" value="{{ keywords }}" size="65" /></label></p>
+    <p><label>Locations (comma separated) <input type="text" name="locations" value="{{ locations }}" size="45" /></label></p>
+    <button type="submit" {% if collecting %}disabled{% endif %}>Collect jobs from all configured sources</button>
+  </form>
+  <a class="btn" href="/jobs/export.csv">Download CSV</a>
   <form class="inline" method="post" action="/jobs/match"><button type="submit">Score matches</button></form>
-</p>
-<table>
-  <thead>
-    <tr>
-      <th>Title</th><th>Company</th><th>Location</th><th>Match</th>
-      <th>Source</th><th>Posted</th><th>Application</th><th>Link</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for job in jobs %}
-    <tr>
-      <td><a href="/jobs/{{ job.id }}">{{ job.title }}</a></td>
-      <td>{{ job.company }}</td>
-      <td>{{ job.location }}</td>
-      <td>{{ job.match_score if job.match_score is not none else "—" }}</td>
-      <td>{{ job.source }}</td>
-      <td>{{ job.posted_date or "—" }}</td>
-      <td>{{ job.application_status or "—" }}</td>
-      <td>{% if job.job_url %}<a href="{{ job.job_url }}" target="_blank" rel="noopener">Open</a>{% endif %}</td>
-    </tr>
-    {% else %}
-    <tr><td colspan="8" class="muted">No jobs collected.</td></tr>
+</div>
+<p class="muted">Searches your configured sources for your roles and locations. Source access varies; check the results below. Use the application links to review and apply.</p>
+{% if collection_error %}<p>Collection error: {{ collection_error }}</p>{% endif %}
+{% if collecting %}
+<p role="status">Collecting jobs. You can review saved listings while the search runs; this page refreshes when finished.</p>
+<script>
+  const collectionPoll = setInterval(async () => {
+    try {
+      const response = await fetch('/api/collection');
+      if (response.ok && !(await response.json()).running) {
+        clearInterval(collectionPoll);
+        window.location.reload();
+      }
+    } catch (_) { /* retry on next interval */ }
+  }, 3000);
+</script>
+{% endif %}
+{% if sources %}
+<ul>
+  {% for source in sources %}
+  <li>{{ source.source }}: {{ source.jobs|length }} listings collected{% if source.error %} — {{ source.error }}{% endif %}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+<details>
+  <summary>Add a job from any platform</summary>
+  <p class="muted">Paste a link to fetch public job details. Fill fields below to override them, or paste all details if fetching is blocked.</p>
+  <form method="post" action="/jobs/import">
+    <p><label>Job title <input type="text" name="title" /></label></p>
+    <p><label>Company <input type="text" name="company" /></label></p>
+    <p><label>Location <input type="text" name="location" /></label></p>
+    <p><label>Application link <input type="url" name="job_url" required /></label></p>
+    <p><label>Job description<br /><textarea name="description" rows="10" cols="80"></textarea></label></p>
+    <button type="submit">Save job</button>
+  </form>
+</details>
+<div class="job-filters">
+  <label>Search jobs <input id="job-search" type="search" placeholder="Title, company, or location" /></label>
+  <label>Source <select id="job-source"><option value="">All sources</option>{% for source in jobs|map(attribute='source')|unique|sort %}<option value="{{ source }}">{{ source }}</option>{% endfor %}</select></label>
+  <label>Status <select id="job-status"><option value="">All statuses</option><option value="none">Not tracked</option>{% for status in jobs|map(attribute='application_status')|select|unique|sort %}<option value="{{ status }}">{{ status }}</option>{% endfor %}</select></label>
+  <label>Minimum score <input id="job-min-score" type="number" min="0" max="100" placeholder="Any" /></label>
+  <button id="reset-filters" type="button">Reset filters</button>
+</div>
+<p id="job-count" class="muted" role="status">{{ jobs|length }} jobs</p>
+<div class="table-scroll">
+<table id="job-table">
+  <thead><tr>
+    {% for key, label in [('title','Title'),('company','Company'),('location','Location'),('score','Match'),('source','Source'),('posted','Posted'),('status','Application')] %}
+    <th scope="col" aria-sort="none"><button type="button" class="sort-column" data-sort="{{ key }}">{{ label }}</button></th>
     {% endfor %}
+    <th scope="col">Link</th>
+  </tr></thead>
+  <tbody>
+  {% for job in jobs %}
+    <tr data-job-id="{{ job.id }}" data-title="{{ job.title }}" data-company="{{ job.company }}" data-location="{{ job.location }}" data-score="{{ job.match_score if job.match_score is not none else '' }}" data-source="{{ job.source }}" data-posted="{{ job.posted_date or '' }}" data-status="{{ job.application_status or 'none' }}">
+      <td><a href="/jobs/{{ job.id }}">{{ job.title }}</a></td>
+      <td>{{ job.company }}</td><td>{{ job.location }}</td>
+      <td>{{ job.match_score if job.match_score is not none else 'Unscored' }}</td>
+      <td>{{ job.source }}</td><td>{{ job.posted_date or 'Unknown' }}</td>
+      <td>{{ job.application_status or 'Not tracked' }}</td>
+      <td>{% if job.job_url %}<a href="{{ job.job_url }}" target="_blank" rel="noopener">Open</a>{% else %}Unavailable{% endif %}</td>
+    </tr>
+  {% endfor %}
+    <tr id="no-jobs" {% if jobs %}hidden{% endif %}><td colspan="8">No jobs match these filters.</td></tr>
   </tbody>
 </table>
+</div>
+<script src="/static/jobs.js" defer></script>
 {% endblock %}

@@ -42,11 +42,7 @@ class RemotiveCollector(BaseCollector):
             if keywords and not any(k.lower() in blob for k in keywords):
                 continue
             location = item.get("candidate_required_location") or "Remote"
-            if locations:
-                loc_l = location.lower()
-                if not any(loc.lower() in loc_l or loc.lower() in "remote" for loc in locations):
-                    if not any(x.lower() in ("remote", "anywhere") for x in locations):
-                        continue
+            # Remotive is remote-only; do not drop jobs because preferred cities are on-site India.
             jobs.append(
                 to_normalized(
                     {
@@ -63,5 +59,5 @@ class RemotiveCollector(BaseCollector):
                     }
                 )
             )
-        logger.info("Remotive collected jobs", count=len(jobs), query=query)
+        logger.info(f"Remotive collected {len(jobs)} jobs (query={query})")
         return jobs

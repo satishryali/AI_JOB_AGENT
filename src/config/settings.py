@@ -41,17 +41,21 @@ class JobSearchSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="JOB_")
 
     keywords: list[str] = Field(default_factory=lambda: ["python", "ai", "machine learning"])
-    locations: list[str] = Field(default_factory=lambda: ["remote"])
+    locations: list[str] = Field(default_factory=lambda: ["Hyderabad", "Bangalore"])
     portals: list[str] = Field(default_factory=lambda: ["linkedin", "indeed"])
     max_results_per_portal: int = Field(default=50, gt=0)
     days_back: int = Field(default=7, gt=0)
-    min_match_score: float = Field(default=50.0, ge=0.0, le=100.0)
+    collection_sites: list[str] = Field(default_factory=lambda: ["linkedin", "indeed", "naukri", "glassdoor", "google"])
+    country: str = "India"
+    source_timeout: int = Field(default=45, gt=0)
+    max_queries_per_source: int = Field(default=6, gt=0)
+    min_match_score: float = Field(default=70.0, ge=0.0, le=100.0)
 
     @field_validator("min_match_score", mode="before")
     @classmethod
     def scale_legacy_score(cls, v):
         if v is None or v == "":
-            return 50.0
+            return 70.0
         value = float(v)
         if 0 < value <= 1:
             return value * 100.0
@@ -65,7 +69,7 @@ class ResumeSettings(BaseSettings):
 
     path: Path = Path("data/resumes/Satyanarayana_Ryali.pdf")
     skills_path: Path = Path("data/resumes/skills.yaml")
-    experience_years: int = Field(default=4, ge=0)
+    experience_years: int = Field(default=5, ge=0)
 
     @field_validator("path", "skills_path", mode="before")
     @classmethod
@@ -106,7 +110,7 @@ class DatabaseSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="DB_")
 
     url: str = ""
-    path: Path = Path("data/job_hunter.db")
+    path: Path = Path("data/applications.db")
 
     @field_validator("path", mode="before")
     @classmethod

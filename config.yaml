@@ -24,23 +24,19 @@ job_search:
     - "machine learning"
     - "data scientist"
   locations:
-    - "remote"
+    - "Hyderabad"
+    - "Bangalore"
+    - "Bengaluru"
   portals:
     - "linkedin"
     - "indeed"
   max_results_per_portal: 50
   days_back: 7
-  min_match_score: 60
+  min_match_score: 70
 
 # Resume Settings
 resume:
-  path: "data/resumes/resume.pdf"
-  skills_path: "data/resumes/skills.yaml"
-  experience_years: 5
-
-# Resume Settings
-resume:
-  path: "data/resumes/resume.pdf"
+  path: "data/resumes/Satyanarayana_Ryali.pdf"
   skills_path: "data/resumes/skills.yaml"
   experience_years: 5
 
@@ -58,7 +54,7 @@ linkedin:
 
 # Database Settings
 database:
-  path: "data/job_hunter.db"
+  path: "data/applications.db"
 
 # Logging Settings
 logging:
