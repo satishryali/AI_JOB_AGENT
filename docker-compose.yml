@@ -3,7 +3,7 @@ services:
     image: postgres:16
     environment:
       POSTGRES_USER: jobhunter
-      POSTGRES_PASSWORD: jobhunter
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: jobhunter
     ports:
       - "5432:5432"
@@ -20,12 +20,12 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql://jobhunter:jobhunter@db:5432/jobhunter
+      DATABASE_URL: ${DOCKER_DATABASE_URL:?Set DOCKER_DATABASE_URL in .env}
       HOST: 0.0.0.0
       PORT: "8000"
       LOG_LEVEL: INFO
     env_file:
-      - .env.example
+      - .env
     depends_on:
       db:
         condition: service_healthy

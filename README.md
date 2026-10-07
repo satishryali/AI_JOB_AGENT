@@ -59,7 +59,7 @@ DATABASE_URL=sqlite:///data/applications.db
 **PostgreSQL** (Docker Compose provides this):
 
 ```text
-DATABASE_URL=postgresql://jobhunter:jobhunter@localhost:5432/jobhunter
+DATABASE_URL=postgresql://jobhunter:<URL_ENCODED_PASSWORD>@localhost:5432/jobhunter
 ```
 
 ## Running the Application
@@ -81,6 +81,8 @@ python -m src.main pipeline --linkedin  # also collect through LinkedIn browser 
 ```
 
 Docker:
+
+Copy `.env.example` to `.env`, set `POSTGRES_PASSWORD` to a new password, and set `DOCKER_DATABASE_URL` to `postgresql://jobhunter:<URL_ENCODED_PASSWORD>@db:5432/jobhunter` using the same password, URL-encoded. Compose loads `.env` and requires both variables.
 
 ```bash
 docker compose up -d --build
